@@ -9,7 +9,6 @@ export const createTask = async (req, res) => {
     // Tạo một task mới theo khuôn mẫu
     const task = new Task({ title });
 
-    // 3. Lưu vào database (phải dùng await vì lưu vào kho mất thời gian)
     const newTask = await task.save();
     res.status(201).json(newTask);
   } catch (error) {
@@ -20,49 +19,72 @@ export const createTask = async (req, res) => {
 
 export const getAllTasks = async (req, res) => {
   // 1. Lấy bộ lọc từ URL (ví dụ: ?filter=week). Nếu không có thì mặc định là "today"
-  const { filter = "today" } = req.query;
+  const { filter = "today", page = 1, limit = 4 } = req.query;
+
+  // Chuyển đổi sang số nguyên
+  const pageNumber = parseInt(page);
+  const limitNumber = parseInt(limit);
+  const skip = (pageNumber - 1) * limitNumber;
 
   const now = new Date();
-  let startDate; // Biến này sẽ chứa ngày bắt đầu cần lọc
+  let startDate;
 
+  // 2. Logic xác định khoảng thời gian (Date Filter)
+  // Logic này quyết định "Phạm vi dữ liệu" (VD: Chỉ lấy task của hôm nay)
   switch (filter) {
     case "today": {
-      // Tạo ngày mới bắt đầu từ 00:00 sáng nay
       startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       break;
     }
     case "week": {
-      // Tính toán ngày thứ Hai đầu tuần
       const mondayDate =
         now.getDate() - (now.getDay() - 1) - (now.getDay() === 0 ? 7 : 0);
       startDate = new Date(now.getFullYear(), now.getMonth(), mondayDate);
       break;
     }
     case "month": {
-      // Lấy ngày mùng 1 của tháng hiện tại
       startDate = new Date(now.getFullYear(), now.getMonth(), 1);
       break;
     }
     case "all":
     default: {
-      startDate = null; // null nghĩa là lấy tất cả, không lọc ngày
+      startDate = null; // null nghĩa là lấy tất cả thời gian
     }
   }
 
-  // Tạo câu lệnh tìm kiếm cho MongoDB: Nếu có startDate thì tìm cái nào LỚN HƠN ($gte) ngày đó
-  const query = startDate ? { createdAt: { $gte: startDate } } : {};
+  // Tạo Query lọc theo ngày (Dùng chung cho cả đếm và lấy list)
+  const dateQuery = startDate ? { createdAt: { $gte: startDate } } : {};
+
+  // 3. Logic lọc theo trạng thái (Status Filter)
+  // Chỉ áp dụng cho danh sách hiển thị (List), không áp dụng cho Badges thống kê
+  let statusQuery = {};
+  if (filter === "active") statusQuery = { status: "active" };
+  if (filter === "completed") statusQuery = { status: "complete" };
 
   try {
     const result = await Task.aggregate([
-      { $match: query }, // Bước 1: Lọc những task thỏa mãn ngày tháng trước
+      { $match: dateQuery }, // BƯỚC 1: Lọc theo ngày trước tiên
       {
         $facet: {
-          // Bước 2: Phân chia kết quả thành 3 luồng dữ liệu riêng biệt
-          // Luồng 1: Lấy danh sách task, sắp xếp mới nhất lên đầu (-1)
-          tasks: [{ $sort: { createdAt: -1 } }],
-          // Luồng 2: Lọc ra task đang làm (active) và đếm tổng số
+          // --- LUỒNG 1: Lấy danh sách nhiệm vụ (Có lọc status + Phân trang) ---
+          tasks: [
+            { $match: statusQuery }, // Lọc status (nếu user chọn active/completed)
+            { $sort: { createdAt: -1 } }, // Sắp xếp mới nhất
+            { $skip: skip }, // Bỏ qua
+            { $limit: limitNumber }, // Lấy số lượng giới hạn
+          ],
+
+          // --- LUỒNG 2: Đếm tổng số task CỦA TRANG HIỆN TẠI (để tính totalPages) ---
+          totalFiltered: [
+            { $match: statusQuery }, // Phải match status giống Luồng 1
+            { $count: "count" },
+          ],
+
+          // --- LUỒNG 3: Đếm Active (Giống code cũ - Để hiện Badge) ---
+          // Đếm trên toàn bộ dateQuery, không bị ảnh hưởng bởi statusQuery
           activeCount: [{ $match: { status: "active" } }, { $count: "count" }],
-          // Luồng 3: Lọc ra task đã xong (complete) và đếm tổng số
+
+          // --- LUỒNG 4: Đếm Complete (Giống code cũ - Để hiện Badge) ---
           completeCount: [
             { $match: { status: "complete" } },
             { $count: "count" },
@@ -71,14 +93,26 @@ export const getAllTasks = async (req, res) => {
       },
     ]);
 
-    // Kết quả trả về là một mảng, ta lấy phần tử đầu tiên
-    const tasks = result[0].tasks;
-    // Lấy số đếm ra, nếu không có dữ liệu thì mặc định là 0
-    const activeCount = result[0].activeCount[0]?.count || 0;
-    const completeCount = result[0].completeCount[0]?.count || 0;
+    // Xử lý kết quả trả về
+    const data = result[0];
 
-    res.status(200).json({ tasks, activeCount, completeCount });
-    [cite_start]; // [cite: 26]
+    const tasks = data.tasks;
+    const activeCount = data.activeCount[0]?.count || 0;
+    const completeCount = data.completeCount[0]?.count || 0;
+
+    // Tính tổng số trang dựa trên số lượng task sau khi đã lọc status
+    const totalTasks = data.totalFiltered[0]?.count || 0;
+    const totalPages = Math.ceil(totalTasks / limitNumber);
+
+    // Trả về đầy đủ thông tin
+    res.status(200).json({
+      tasks,
+      activeCount,
+      completeCount,
+      totalPages,
+      currentPage: pageNumber,
+      totalTasks,
+    });
   } catch (error) {
     console.error("Lỗi khi gọi getAllTasks", error);
     res.status(500).json({ message: "Lỗi hệ thống" });
