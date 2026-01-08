@@ -7,7 +7,7 @@ export const createTask = async (req, res) => {
     const { title } = req.body;
 
     // Tạo một task mới theo khuôn mẫu
-    const task = new Task({ title });
+    const task = new Task({ title, user: req.user._id });
 
     const newTask = await task.save();
     res.status(201).json(newTask);
@@ -53,7 +53,10 @@ export const getAllTasks = async (req, res) => {
   }
 
   // Tạo Query lọc theo ngày (Dùng chung cho cả đếm và lấy list)
-  const dateQuery = startDate ? { createdAt: { $gte: startDate } } : {};
+  const dateQuery = {
+    user: req.user._id, // Chỉ lấy task của user đang đăng nhập
+    ...(startDate ? { createdAt: { $gte: startDate } } : {}),
+  };
 
   // 3. Logic lọc theo trạng thái (Status Filter)
   // Chỉ áp dụng cho danh sách hiển thị (List), không áp dụng cho Badges thống kê
@@ -122,14 +125,14 @@ export const getAllTasks = async (req, res) => {
 export const updateTask = async (req, res) => {
   try {
     const { title, status, completedAt } = req.body;
-    const updatedTask = await Task.findByIdAndUpdate(
-      req.params.id, // Lấy ID từ URL (ví dụ: /tasks/123 -> id là 123)
+    const updatedTask = await Task.findOneAndUpdate(
+      { _id: req.params.id, user: req.user._id }, // Điều kiện tìm kiếm an toàn
       {
         title,
         status,
         completedAt,
       },
-      { new: true } // QUAN TRỌNG: Trả về dữ liệu MỚI sau khi sửa (mặc định Mongo trả cái cũ)
+      { new: true }
     );
 
     if (!updatedTask) {
@@ -145,8 +148,11 @@ export const updateTask = async (req, res) => {
 
 export const deleteTask = async (req, res) => {
   try {
-    // Tìm và xóa luôn theo ID
-    const deleteTask = await Task.findByIdAndDelete(req.params.id);
+    // Chỉ xóa nếu task đó thuộc về user đang đăng nhập
+    const deleteTask = await Task.findOneAndDelete({
+      _id: req.params.id,
+      user: req.user._id,
+    });
 
     if (!deleteTask) {
       return res.status(404).json({ message: "Nhiệm vụ không tồn tại" });

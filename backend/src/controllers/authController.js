@@ -37,7 +37,7 @@ export const signUp = async (req, res) => {
     });
 
     // return
-    return res.sendStatus(204);
+    return res.status(201).json({ message: "Đăng ký thành công" });
   } catch (error) {
     console.error("Lỗi khi gọi signUp", error);
     return res.status(500).json({ message: "Lỗi hệ thống" });
