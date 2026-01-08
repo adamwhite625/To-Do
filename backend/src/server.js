@@ -25,7 +25,7 @@ app.use(express.json());
 app.use(cookieParser()); // Kích hoạt đọc cookie
 
 if (process.env.NODE_ENV !== "production") {
-  app.use(cors({ origin: "http://localhost:5173" }));
+  app.use(cors({ origin: "http://localhost:5173", credentials: true }));
 }
 
 // 4. Routes Public (Ai cũng vào được)
